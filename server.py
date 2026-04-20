@@ -105,6 +105,7 @@ class Server(object):
         self.model = self.model_for_aggregate
     
     def eval(self, cur_round, eval_avg_acc):
+
         if self.args.eval_metrics == 'none':
             eval_metric = self.eval_loss(cur_round)
             metric_type = "loss"
@@ -115,41 +116,43 @@ class Server(object):
 
         else:
             eval_metric = self.eval_generate(cur_round)
-            metric_type = self.args.generate_eval  # rouge ή bleu
+            metric_type = self.args.generate_eval  # rouge / bleu
 
-    # ✔ σωστό logging
+    # ===== LOGGING =====
         eval_avg_acc.append(eval_metric)
 
-    # ===== SAVE CHECKPOINTS =====
+    # ===== SAVE =====
         if self.args.save and cur_round > 0:
+
             save_dir = self.log_dir
             os.makedirs(save_dir, exist_ok=True)
 
-        if len(eval_avg_acc) > 1:
-            is_best = (
+            if len(eval_avg_acc) > 1:
+
+                is_best = (
                 (metric_type == "loss" and eval_metric < np.min(eval_avg_acc))
                 or
                 (metric_type != "loss" and eval_metric > np.max(eval_avg_acc))
-            )
-
-            if is_best:
-                for file_name in os.listdir(save_dir):
-                    if 'best' in file_name:
-                        os.remove(os.path.join(save_dir, file_name))
-
-                torch.save(
-                    self.model.state_dict(),
-                    os.path.join(save_dir, f'model_best_round{cur_round}.bin')
                 )
 
-        for file_name in os.listdir(save_dir):
-            if 'final' in file_name:
-                os.remove(os.path.join(save_dir, file_name))
+                if is_best:
+                    for file_name in os.listdir(save_dir):
+                        if 'best' in file_name:
+                            os.remove(os.path.join(save_dir, file_name))
 
-        torch.save(
+                    torch.save(
+                    self.model.state_dict(),
+                    os.path.join(save_dir, f'model_best_round{cur_round}.bin')
+                    )
+
+            for file_name in os.listdir(save_dir):
+                if 'final' in file_name:
+                    os.remove(os.path.join(save_dir, file_name))
+
+            torch.save(
             self.model.state_dict(),
             os.path.join(save_dir, f'model_final_round{cur_round}.bin')
-        )
+            )
 
         return eval_metric, metric_type
     
@@ -157,39 +160,55 @@ class Server(object):
     def eval_loss(self, cur_round):
         self.model = self.model.to(self.device)
         self.model.eval()
-        
+
         progress_bar_eval = tqdm(range(len(self.eval_loader)))
+
         loss_total_eval = 0.0
-        num_eval = 0
+        num_batches = 0
         loss_list = []
-        
+
         with torch.inference_mode():
             for batch in self.eval_loader:
                 batch = {
-                    'input_ids': batch['input_ids'].to(self.device),
-                    'labels': batch['labels'].to(self.device),
-                    'attention_mask': batch['attention_mask'].to(self.device) 
+                'input_ids': batch['input_ids'].to(self.device),
+                'labels': batch['labels'].to(self.device),
+                'attention_mask': batch['attention_mask'].to(self.device)
                 }
+
                 outputs = self.model(**batch)
                 loss = outputs.loss
+
                 progress_bar_eval.update(1)
-                if torch.isnan(loss):
-                    loss_list.append('NaN')
+
+            # skip invalid loss
+                if loss is None or torch.isnan(loss):
+                    loss_list.append(None)
                     continue
-                loss_list.append(str(loss.item()))
-                loss_total_eval += loss
-                num_eval += len(batch['input_ids'])
-                if num_eval == 0:
-                    num_eval = 1e-10
-                progress_bar_eval.set_description(f'eval at round {cur_round}, loss: {loss_total_eval / num_eval}')
+
+                loss_value = loss.item()
+                loss_list.append(loss_value)
+
+                loss_total_eval += loss_value
+                num_batches += 1
+
+                avg_loss = loss_total_eval / max(num_batches, 1)
+
+                progress_bar_eval.set_description(
+                f'eval at round {cur_round}, loss: {avg_loss:.4f}'
+                )
+
         print()
         print()
+
         self.eval_loss_history.append(loss_list)
+
         if self.args.log:
-            with open(os.path.join(self.log_dir, 'eval_loss_history.json'), 'w', ) as writer:
+            with open(os.path.join(self.log_dir, 'eval_loss_history.json'), 'w') as writer:
                 json.dump(self.eval_loss_history, writer)
+
         self.model = self.model.cpu()
-        return (loss_total_eval / num_eval).item()
+
+        return loss_total_eval / max(num_batches, 1)
     
     
     def eval_generate(self, cur_round):
