@@ -116,7 +116,7 @@ class Server(object):
 
         else:
             eval_metric = self.eval_generate(cur_round)
-            metric_type = self.args.generate_eval  # rouge / bleu
+            metric_type = self.args.generate_eval  
 
     # ===== LOGGING =====
          eval_avg_acc.append(eval_metric)
