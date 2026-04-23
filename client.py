@@ -138,18 +138,21 @@ class Client(object):
 
             batch = {
                 'input_ids': batch['input_ids'].to(self.device),
-                'labels': batch['labels'].to(self.device),
                 'attention_mask': batch['attention_mask'].to(self.device)
             }
+
+            labels = batch['input_ids'].clone()
+            labels[batch['attention_mask'] == 0] = -100
+            batch['labels'] = labels
+
+            optimizer.zero_grad()
 
             outputs = self.model(**batch)
             loss = outputs.loss
 
-            if not torch.isnan(loss):
+            if loss is not None and not torch.isnan(loss):
                 loss.backward()
                 optimizer.step()
-
-            optimizer.zero_grad()
 
         self.model = self.model.cpu()
 
